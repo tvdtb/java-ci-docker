@@ -1,0 +1,139 @@
+version: "3.2"
+# sudo sh -c "echo vm.max_map_count=262144 >> /etc/sysctl.conf„
+# sudo sysctl -p
+# usermod -aG docker jenkins
+networks:
+  nw:
+volumes:
+  gitlab_config:
+  gitlab_logs:
+  gitlab_data:
+  jenkins_data:
+  sonardb_data:
+  nexus_data:
+  
+services:
+
+  loadbalancer:
+    build:
+      context: services/loadbalancer
+      dockerfile: Dockerfile
+    restart: "unless-stopped"
+    ports:
+      - 80:80
+      - 443:443
+    environment:
+      - HOST_EXTERNAL=${HOST_EXTERNAL}
+    networks:
+      nw:
+        aliases:
+          - ${HOST_EXTERNAL}
+
+#  gitlab is a rather expensive container - so it's disabled by default      
+  gitlab:
+    image: gitlab/gitlab-ce:13.4.4-ce.0
+    restart: "no"
+    networks:
+      - nw
+    environment:
+      # - JVM_OPTS=-Xmx1024m -Xms1024 -XX:MaxPermSize=1024m
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://${HOST_EXTERNAL}/gitlab/'
+        web_server['username'] = 'git'
+        web_server['group'] = 'git'
+    ports:
+      - "10080:80"
+      - "10443:443"
+      - "10022:22"
+    volumes:
+      - gitlab_config:/etc/gitlab
+      - gitlab_logs:/var/log/gitlab
+      - gitlab_data:/var/opt/gitlab
+      
+  jenkins:
+    # https://plugins.jenkins.io/docker-plugin
+    # https://devopscube.com/docker-containers-as-build-slaves-jenkins/
+    #
+    # Jenkins-Docker working directory:
+    #  setfacl -R -m u:10000:rwx /tmp/jenkins-m2/
+    #  setfacl -R -m d:u:10000:rwx /tmp/jenkins-m2/
+    #  setfacl -R -m u:10000:rwx /tmp/jenkins-workspace/
+    #  setfacl -R -m d:u:10000:rwx /tmp/jenkins-workspace/
+    build:
+      context: services/jenkins
+      dockerfile: Dockerfile
+    privileged: true
+    restart: "no"
+    ports:
+      - "9080:8080"
+      - "50000:50000"
+    networks:
+      - nw
+    volumes:
+      - jenkins_data:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - JVM_OPTS=-Xmx1024m -Xms1024m -XX:MaxPermSize=1024m
+      - JENKINS_OPTS="--prefix=/jenkins"
+      - NEXUS_PORT=8081
+      
+  nexus:
+    image: sonatype/nexus3:3.28.1
+    restart: "unless-stopped"
+    ports:
+      - "9091:8081"
+    networks:
+      - nw
+    volumes:
+      - nexus_data:/nexus-data
+    environment:
+      - JVM_OPTS=-Xmx512m -Xms512m -XX:MaxPermSize=256m
+      - NEXUS_CONTEXT=nexus
+      
+  sonarqube:
+    image: sonarqube:8.5.0-community
+    command: -Dsonar.web.context=/sonarqube
+    restart: "unless-stopped"
+    ports:
+     - "9000:9000"
+     - "9092:9092"
+    networks:
+      - nw
+    environment:
+     - JVM_OPTS=-Xmx1024m -Xms1024 -XX:MaxPermSize=1024m
+     - SONARQUBE_JDBC_URL=jdbc:postgresql://sonardb:5432/sonar
+     - SONARQUBE_JDBC_USERNAME=sonar
+     - SONARQUBE_JDBC_PASSWORD=${PASSWORD_SONAR}
+#   volumes:
+#      - ./extensions:${CI_HOME}/services/sonarqube/sonar
+      
+  sonardb:
+    # https://docs.sonarqube.org/latest/requirements/requirements/
+    image: postgres:12.4-alpine
+    networks:
+      - nw
+    restart: "unless-stopped"
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=sonar
+      - POSTGRES_PASSWORD=${PASSWORD_SONAR}
+      - POSTGRES_DB=sonar
+    volumes:
+      - sonardb_data:/var/lib/postgresql/data
+      
+#  registry:
+#    image: registry:2.7.1
+#    networks:
+#      - nw
+#    restart: "no"
+#    ports:
+#      - "5000:5000"
+#    #environment:
+#    #  - REGISTRY_AUTH=htpasswd
+#    #  - REGISTRY_AUTH_HTPASSWD_REALM=dockerregistry
+#    #  - REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd
+#    volumes:
+#      - registry_data:/var/lib/registry
+      
+      
