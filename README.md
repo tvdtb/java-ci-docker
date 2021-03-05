@@ -6,18 +6,35 @@ in nexus)
 
 This is NOT a security tutorial, this setup uses http and weak passwords which is NOT recommended!
 
+This setup works on both Linux (virtual) machines as well as on Docker Desktop for Windows (WSL 2) - see comments below.
+
 # Guide
 
-This is a one-time step to setup your Linux machine
+This is a one-time step to setup your Linux (virtual) machine
 
+Linux/ virtual machine:
 ```{r, engine='bash', count_lines}
 sudo sh -c "echo vm.max_map_count=262144 >> /etc/sysctl.conf"
 sudo sysctl -p
 ```
 
+WSL:
+```{r, engine='bash', count_lines}
+# In PowerShell
+wsl -d docker-desktop
+echo vm.max_map_count=262144 >> /etc/sysctl.conf
+sysctl -p
+```
+
+Changes are instantly effective.
+
+
 ## Configure Environment
 
 Edit `.env` and adjust relevant values.
+
+If using a virtual machine, I suggest using the real host name to access the machine - or use an alias e.g. `docker.vm` 
+for virtual machines or `docker.win` for Docker desktop.
 
 ## Loadbalanacer
 
@@ -29,7 +46,7 @@ The Loadbalancer service forwards HTTP(s) requests to the appropriate servers an
 port 22. By that, all clients only need to connect to the loadbalancer in order to access any service.
  
 There is an alias name HOST_EXTERNAL which is assigned to loadbalancer in order to make this network name available
-in the docker network without having to connect to the external network.
+in the docker network without having to connect to the external network. Use the real hostname or your chosen alias for that.
 
 ### Setup 
 
