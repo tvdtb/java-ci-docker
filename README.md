@@ -8,17 +8,21 @@ This is NOT a security tutorial, this setup uses http and weak passwords which i
 
 This setup works on both Linux (virtual) machines as well as on Docker Desktop for Windows (WSL 2) - see comments below.
 
+This guide will walk you through all steps required to connect the systems, it's highly recommended to start with 
+using Nexus deployment or Sonarqube integration from local builds!
+
 # Guide
 
-This is a one-time step to setup your Linux (virtual) machine
-
-Linux/ virtual machine:
+## Linux/ virtual machine:
+This is a one-time step to setup your machine
 ```{r, engine='bash', count_lines}
 sudo sh -c "echo vm.max_map_count=262144 >> /etc/sysctl.conf"
 sudo sysctl -p
 ```
 
-WSL:
+## WSL 2
+required after each restart
+
 ```{r, engine='bash', count_lines}
 # In PowerShell
 wsl -d docker-desktop
@@ -28,25 +32,45 @@ sysctl -p
 
 Changes are instantly effective.
 
+## Network setup
+
+There are different scenarios to access the environment:
+- physical machine using a real hostname
+  - in this case, everything should be fine by default
+  - this hostname will be the value for `.env` variable `HOST_EXTERNAL` below
+  - this hostname is available from everywhere, even from within docker containers
+- WSL 2 setup, supported only locally
+  - configure an entry - e.g. `docker.win` - in your windows hosts file pointing to 127.0.0.1
+  - this will be the value for `.env` variable `HOST_EXTERNAL` below
+  - docker containers should be started in the docker network `ci_nw`, otherwise docker.win will resolve to
+  127.0.0.1 which is the container's localhost address 
+- VirtualBox/VMWare machine
+  - define the machine's ip in the machine's /etc/hosts and your windows hosts file using e.g. `docker.vm`
+  - this will be the value for `.env` variable `HOST_EXTERNAL` below
+  - docker containers should be started in the docker network `ci_nw`
+    - you might install a DNS server to make this hostname avaiable for all docker containers
+    - install and enable `dnsmasq` and configure the machine's ip for [Docker as DNS server](https://docs.docker.com/engine/reference/commandline/dockerd/#daemon-configuration-file)
 
 ## Configure Environment
 
 Edit `.env` and adjust relevant values.
 
-If using a virtual machine, I suggest using the real host name to access the machine - or use an alias e.g. `docker.vm` 
-for virtual machines or `docker.win` for Docker desktop.
+See above for hints regarding HOST_EXTERNAL. The main goal is to use the same name from everywhere to access all services
+using the loadbalancer.
+
 
 ## Loadbalanacer
 
 Loadbalancer is the single point of access to all services and removes the need for adding the specific ports to the URL
 of each service. The only requirement is that it's reachable from everywhere using the same (virtual) hostname
-by providing an alias (in docker-compose.yml) and possibly your local hosts file.
+by providing an alias (in docker-compose.yml) using HOST_EXTERNAL, see network setup above.
 
 The Loadbalancer service forwards HTTP(s) requests to the appropriate servers and connects its port 10022 to gitlab
 port 22. By that, all clients only need to connect to the loadbalancer in order to access any service.
  
 There is an alias name HOST_EXTERNAL which is assigned to loadbalancer in order to make this network name available
 in the docker network without having to connect to the external network. Use the real hostname or your chosen alias for that.
+
 
 ### Setup 
 
@@ -60,7 +84,7 @@ docker-compose up -d --build loadbalancer
 
 Try to open the hostname you configured in `.env` as `HOST_EXTERNAL`
 
-This README assumes URL_EXTERNAL to be `docker.vm`, so open `http://docker.vm`, you should see
+This README assumes URL_EXTERNAL to be `docker.win`, so open `http://docker.win`, you should see
 a HTML page linking to the services which will be started in the next steps.
 
 ### Useful commands
@@ -69,6 +93,19 @@ a HTML page linking to the services which will be started in the next steps.
 docker-compose start loadbalancer
 docker-compose stop  loadbalancer
 docker-compose exec  loadbalancer tail -f /var/log/httpd/access_log    
+```
+
+### How to verify your network setup:
+
+All these commands should respond with a simple html page saying 'Loadbalancer access works' 
+
+```
+# Both of these are required to work
+docker-compose exec loadbalancer curl http://docker.win/test.html
+docker run --rm -it --network ci_nw alpine wget -O - http://docker.win/test.html
+
+# if this one gives the same result, you could omit the --network parameter in the Jenkinsfile agent.
+docker run --rm -it alpine wget -O - http://docker.win/test.html 
 ```
 
 
@@ -84,7 +121,7 @@ docker-compose exec nexus cat /nexus-data/admin.password
 Open
 
 ```{r, engine='bash', count_lines}
-http://docker.vm/nexus/
+http://docker.win/nexus/
 ```
 
 Access Nexus, login as `admin` with the password printed out by the second command.
@@ -108,6 +145,8 @@ Create a repository
 * Server Administration -> Repositories -> Create a hosted repository of type `maven/hosted` e.g. `ci-java` using the 
 created blob store and version policy `mixed`
 * Modify repository `maven-public` and add `ci-java` 
+* For e.g. Spring Boot create a proxied m2-repository for `https://repo.spring.io/release/` and add this to 
+`maven-public` as well
 * Create a role eg. `nx-java`
 * Assign Privilege `nx-repository-view-`[repository-type]`-`[repository-name]`-*`
 * Assign Roles `nx-anonymous`
@@ -132,12 +171,12 @@ Add `distributionManagement` to your pom:
 		<repository>
 			<id>demo-releases</id>
 			<name>demo Repository Releases</name>
-			<url>http://docker.vm/nexus/repository/ci-java/</url>
+			<url>http://docker.win/nexus/repository/ci-java/</url>
 		</repository>
 		<snapshotRepository>
 			<id>demo-snapshots</id>
 			<name>demo Repository Snapshots</name>
-			<url>http://docker.vm/nexus/repository/ci-java/</url>
+			<url>http://docker.win/nexus/repository/ci-java/</url>
 		</snapshotRepository>
 	</distributionManagement>
 ```
@@ -151,7 +190,7 @@ to the repository group maven-public. The same applies to your own repositories.
 	<mirrors>
 		<mirror>
 			<id>nexus</id>
-			<url>http://docker.vm/nexus/repository/maven-public/</url>
+			<url>http://docker.win/nexus/repository/maven-public/</url>
 			<mirrorOf>*</mirrorOf>
 		</mirror>
 	</mirrors>
@@ -213,16 +252,16 @@ For documentation see
 Add your credentials to nexus with npm:
 
 ```
-npm adduser --registry http://docker.vm/nexus/repository/ci-npm/
+npm adduser --registry http://docker.win/nexus/repository/ci-npm/
 ```
 
 Configure your project (or global, $USER_HOME) `.npmrc` to contain the url to the repository group:
 
 ```
-registry=http://docker.vm/nexus/repository/npm-public/
+registry=http://docker.win/nexus/repository/npm-public/
 ```
 
-Npm install should now download from your nexus instance, check using http://docker.vm/nexus/#browse/browse:npm-public 
+Npm install should now download from your nexus instance, check using http://docker.win/nexus/#browse/browse:npm-public 
 before and after running 
 
 `npm install`
@@ -232,7 +271,7 @@ Configure your project for publishing, the trailing `/` in the URL is important!
 ```
 ...
   "publishConfig": {
-    "registry": "http://docker.vm/nexus/repository/ci-npm/"
+    "registry": "http://docker.win/nexus/repository/ci-npm/"
   },
 ...
 ```
@@ -246,7 +285,7 @@ And run the appropriate script to build & deploy your code
 ## Sonarqube
 
 ```{r, engine='bash', count_lines}
-http://docker.vm/sonarqube/
+http://docker.win/sonarqube/
 ```
 
 Default sonar user is `admin` using password `admin`, Generate a token for your account and save it ... 
@@ -279,16 +318,43 @@ Documentation: https://docs.sonarqube.org/latest/analysis/scan/sonarscanner-for-
 Run Sonar using the maven plugin by adding
 
 ```
-sonar:sonar -Dsonar.host.url=http://docker.vm/sonarqube/ -Dsonar.login=${SONAR_TOKEN}
+sonar:sonar -Dsonar.host.url=http://docker.win/sonarqube/ -Dsonar.login=${SONAR_TOKEN}
 ```
 
 to your maven command
 
 ```
-docker-here openjdk:11 sh ./mvnw --settings ./settings.xml -Dsonar.host.url=http://docker.vm/sonarqube/ -Dsonar.login=${SONAR_TOKEN} clean deploy sonar:sonar
+docker-here openjdk:11 sh ./mvnw --settings ./settings.xml -Dsonar.host.url=http://docker.win/sonarqube/ -Dsonar.login=${SONAR_TOKEN} clean deploy sonar:sonar
 ```
 
 and the project should appear in Sonarqube
+
+For code coverage analysis with maven and sonarqube, you need to add to build-plugins
+
+```xml
+...
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>0.8.6</version>
+        <executions>
+          <execution>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+            <id>default-prepare-agent</id>
+          </execution>
+          <execution>
+            <goals>
+              <goal>report</goal>
+            </goals>
+            <id>default-report</id>
+            <phase>prepare-package</phase>
+          </execution>
+        </executions>
+      </plugin>
+...
+```
 
 ### Sonarqube and npm
 
@@ -319,34 +385,6 @@ Run
 npm run sonar
 ```
 
-
-For code coverage analysis with maven and sonarqube, you need to add to build-plugins
-
-```xml
-...
-      <plugin>
-        <groupId>org.jacoco</groupId>
-        <artifactId>jacoco-maven-plugin</artifactId>
-        <version>0.8.6</version>
-        <executions>
-          <execution>
-            <goals>
-              <goal>prepare-agent</goal>
-            </goals>
-            <id>default-prepare-agent</id>
-          </execution>
-          <execution>
-            <goals>
-              <goal>report</goal>
-            </goals>
-            <id>default-report</id>
-            <phase>prepare-package</phase>
-          </execution>
-        </executions>
-      </plugin>
-...
-```
-
 ## Gitlab
 
 Gitlab is a rather heavy container and takes some minutes to start up.
@@ -354,7 +392,7 @@ Gitlab is a rather heavy container and takes some minutes to start up.
 The default admin user is `root` and you have to change the password on first access. On first login, you need to
 change passwords for new users. Due to the password policy, a simple valid password is `gitlab123`.
 
-http://docker.vm/gitlab
+http://docker.win/gitlab
 
 Set up additional users and projects as required, this README will use project `demo-java` for user root.
 
@@ -368,7 +406,7 @@ docker-compose logs -f gitlab
 
 ### Gitlab Access 
 
-Gitlab offers http and ssh access. For HTTP the base URL is `http://docker.vm/gitlab/` which is proxied by the 
+Gitlab offers http and ssh access. For HTTP the base URL is `http://docker.win/gitlab/` which is proxied by the 
 loadbalancer. SSH in gitlab might collide with your machine's SSH, therefore it is by default configured for 
 port 10022, so your SSH access to gitlab git repositories has to be configured.
 
@@ -378,59 +416,33 @@ It is
 - Machine SSH: Port    22
 - Gitlab SSH:  Port 10022
 
-The default URL `git@docker.vm:root/demo-java.git` will not work out of the box.
+The default URL `git@docker.win:root/demo-java.git` will not work out of the box.
 
 For SSH access you need a key pair, which might already be generated in `~/.ssh/id_*` and should be added to your
-gitlab account using http://docker.vm/gitlab/profile/keys
+gitlab account using http://docker.win/gitlab/profile/keys
 
 To generate a key pair e.g. for jenkins use (without -f ... it generates your personal keys)
 * `ssh-keygen -t rsa -b 4096 -f keys-jenkins.rsa` 
 * or `ssh-keygen -t ed25519 -f keys-jenkins.ed25519`
 
 
-#### Option 1: Use ssh URLs (best option, no network setup required)
+#### Option 1: Use ssh URLs (easiest option, no network setup required)
 
 Cloning and ssh access works with the following commands, ssh access needs to be converted to URL form in order to
 add the port specification starting with `ssh://`
-In all cases, `docker.vm` is used as `HOST_EXTERNAL`, so actually all connects go to loadbalancer which forwards
+In all cases, `docker.win` is used as `HOST_EXTERNAL`, so actually all connects go to loadbalancer which forwards
 those connections. 
 
 ```{r, engine='bash', count_lines}
-# modify        git@docker.vm:root/demo-java.git        to
-git clone ssh://git@docker.vm:10022/root/demo-java.git
+# modify        git@docker.win:root/demo-java.git        to
+git clone ssh://git@docker.win:10022/root/demo-java.git
 
-ssh user@docker.vm
+ssh user@docker.win
 ```
 
-#### Option 2: Use http for gitlab
+#### Option 2: Configure ssh
 
-But HTTP is not secure for passwords. In git for Windows, the Credentials Manager will handle saved passwords.
-
-Cloning and ssh access works with the commands
-
-```{r, engine='bash', count_lines}
-git clone http://docker.vm/gitlab/root/demo-java.git
-
-ssh user@docker.vm
-```
-
-#### Option 3: Configure networking
-
-See blog post: TODO
-
-##### Option 2.1: Make gitlab use port 22, move SSH to another port
-
-TODO - document how to do this with vagrant
-
-Cloning and ssh access works with the commands (you need to add -p ... for pure ssh)
-
-```{r, engine='bash', count_lines}
-git clone git@docker.vm:root/demo-java.git
-
-ssh -p [another port] user@docker.vm
-```
-
-##### Option 2.2: Configure ssh access default
+##### Option 2.1: Configure ssh access default (best and most secure option)
 
 `~/.ssh/config` modifies the port used by default
 
@@ -441,24 +453,48 @@ vi ~/.ssh/config
 Content 
 
 ```{r, engine='bash', count_lines}
-Host docker.vm
-  Hostname docker.vm
-  User git
+Host docker.win
   Port 10022
 ```
 
 Cloning and ssh access work with the commands (you need to add -p 22 for pure ssh)
 
 ```{r, engine='bash', count_lines}
-git clone git@docker.vm:root/demo-java.git
+git clone git@docker.win:root/demo-java.git
 
-ssh -p 22 user@docker.vm
+ssh -p 22 user@docker.win
 ```
+
+##### Option 2.2: Make gitlab use port 22, move SSH to another port
+
+(currently not documented for VirtualBox, not required for WSL)
+
+Cloning and ssh access works with the commands (you need to add -p ... for pure ssh)
+
+```{r, engine='bash', count_lines}
+git clone git@docker.win:root/demo-java.git
+
+ssh -p [another port] user@docker.win
+```
+
+#### Option 2: Use http for gitlab
+
+But HTTP is not secure for passwords. In git for Windows, the Credentials Manager will handle saved passwords.
+
+Cloning and ssh access works with the commands
+
+```{r, engine='bash', count_lines}
+git clone http://docker.win/gitlab/root/demo-java.git
+
+ssh user@docker.win
+```
+
+
 
 ## Jenkins
 
 ```{r, engine='bash', count_lines}
-http://docker.vm/jenkins/
+http://docker.win/jenkins/
 ```
 
 Get the initial Secret
@@ -468,26 +504,27 @@ docker-compose exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
 ```
 
 Install suggested plugins, setup account for administrator, e.g. `admin` / `admin` and use the appropriate URL
-as Jenkins URL, e.g. http://docker.vm/jenkins/
+as Jenkins URL, e.g. http://docker.win/jenkins/
 
 To create a read-only `Jenkins` user in gitlab, follow the following steps:
 
 Gitlab:
 * Login gitlab with admin account and create a new user `jenkins`, ignore password.
 * Admin area ---> users ---> edit `jenkins` user ---> set password (e.g. `jenkins123`)
-* Add `jenkins` as member with role `Reporter` to project(s)
-* Login using `jenkins`
-* Change password as advised
+* In opened user `jenkins` click `impersonate`
 * Add ssh key for jenkins to this account
+* Add `jenkins` as member with role `Developer` to project(s)
+* Login using `jenkins` and change password as advised, you might use `jenkins123` again
 
 Jenkins:
 * Login to Jenkins as admin
 * Jenkins -> Manage Jenkins -> System Configuration
-  * Check the `Jenkins Location` URL to match the URL you see in the browser, e.g. http://docker.vm/jenkins/
+  * Check the `Jenkins Location` URL to match the URL you see in the browser, e.g. http://docker.win/jenkins/
 * Jenkins -> Manage Jenkins -> Configure Global Security
   * Authorization Strategy: Project-based Matrix Authorization Strategy
 * Jenkins -> Manage Jenkins -> Plugins
-  * Update all Plugins http://docker.vm/jenkins/pluginManager/
+  * http://docker.win/jenkins/updateCenter/ - Click restart checkbox at the very bottom
+  * Update all Plugins http://docker.win/jenkins/pluginManager/
   * Install Docker Pipeline Plugin: https://plugins.jenkins.io/docker-workflow/
   * Install Authorize Project: https://plugins.jenkins.io/authorize-project/
   * Check restart checkbox which will restart jenkins when finished installing to apply plugin updates
@@ -502,13 +539,15 @@ Jenkins:
 
 It's important to define the names above as credential ID.
 
-Manage credentials is in http://docker.vm/jenkins/credentials/store/system/domain/_/
+Manage credentials is in http://docker.win/jenkins/credentials/store/system/domain/_/
   
+
 After that, not only jenkins but the whole jenkins container needs to be restarted once. The reason for that
 is the custom entrypoint script provided in this jenkins container. It adjusts the group id of the docker group
 in the container to the docker group id on the host system. But this won't be effective until
 
 ```
+# VirtualBox / Linux only
 docker-compose restart jenkins
 ```
 
@@ -523,7 +562,7 @@ You should see the same output as `docker ps` outputs on the machine's console.
 Create a jenkins project 
 * named `demo-java` 
 * using type `Multibranch Pipeline`
-* Add branch source of type `git` with repository `ssh://git@docker.vm:10022/root/demo-java.git`
+* Add branch source of type `git` with repository `ssh://git@docker.win:10022/root/demo-java.git`
 * Choose the created credentials
 * Save
 
@@ -538,6 +577,7 @@ pipeline {
     agent {
         docker {
             image 'openjdk:11'
+            args '--network ci_nw'
         }
     }
     stages {
@@ -556,6 +596,8 @@ pipeline {
 
 * agent -> docker  instructs docker to start your build within docker. Therefore the docker binaries are built into
 the image and the appropriate permissions are defined at startup
+  * the --network ci_nw makes the container start in the ci network, so all other containers will be available by their
+  docker-compose service name
 * Only Java is required to build java, maven is downloaded by maven wrapper
 * Maven Settings File are provided as a secret file and passed to maven using `--settings`. It contains the nexus 
  credentials
@@ -585,25 +627,27 @@ the agent definition then looks as follows
 ```
 
 
-To integrate gitlab with Jenkins,
+To integrate gitlab with Jenkins:
 
 * Create a user `gitlab` in Jenkins
 * Assign "Overall - Read" permission to gitlab in Global Security
-* As user `gitlab` create an API token in http://docker.vm/jenkins/user/gitlab/configure which should look like this:
+* As user `gitlab` create an API token in http://docker.win/jenkins/user/gitlab/configure which should look like this:
 `115e09e85a035e5f2a166f0cffa7abad0c`
-* In your project Open `Configure` (http://docker.vm/jenkins/job/demo-java/configure) 
+* In your project Open `Configure` (http://docker.win/jenkins/job/demo-java/configure) 
    * check Properties -> Enable project-based security
    * Add user `gitlab` and allow Job -> Build  and Project -> Read
-* Check by running `curl -v --user gitlab:115e09e85a035e5f2a166f0cffa7abad0c -X POST http://docker.vm/jenkins/job/demo-java/build`
-or `http://gitlab:115e09e85a035e5f2a166f0cffa7abad0c@docker.vm/jenkins/job/demo-java/build`
-the response should be HTTP 302 redirecting to the build log in  http://docker.vm/jenkins/job/demo-java/
+* Check by running `curl -v --user gitlab:115e09e85a035e5f2a166f0cffa7abad0c -X POST http://docker.win/jenkins/job/demo-java/build`
+or `http://gitlab:115e09e85a035e5f2a166f0cffa7abad0c@docker.win/jenkins/job/demo-java/build`
+the response should be HTTP 302 redirecting to the build log in  http://docker.win/jenkins/job/demo-java/
 * In gitlab navigate to your project -> Settings -> WebHooks
-* Add WebHook for Push events to URL `http://[user]:[token]@docker.vm/jenkins/job/[job-name]/build` which is for this 
-example `http://gitlab:115e09e85a035e5f2a166f0cffa7abad0c@docker.vm/jenkins/job/demo-java/build` which actually
+* Add WebHook for Push events to URL `http://[user]:[token]@docker.win/jenkins/job/[job-name]/build` which is for this 
+example `http://gitlab:115e09e85a035e5f2a166f0cffa7abad0c@docker.win/jenkins/job/demo-java/build` which actually
 corresponds to scanning the multibranch pipeline
 * Uncheck SSL verification if you used self-signed certificates
 * Click on Test, which should return the message `Hook executed successfully: HTTP 200`
 * Now open jenkins again and push a change to gitlab, Jenkins should instantly build your code
+
+If you created a folder, e.g. `demo` for your project, insert `demo/job` in the url above.
 
 Documentation for WebHooks with Jenkins are based on Jenkins API: https://www.jenkins.io/doc/book/using/remote-access-api/
 
