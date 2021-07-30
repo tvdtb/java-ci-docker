@@ -1,7 +1,7 @@
 # A Standard Java Container-based Development and Continuous Integration Pipeline
 
 ## What it is
-A docker-compose based infrastructure containing gitlab, jenkins, sonarqube, nexus and registry (optional, also included
+A docker compose based infrastructure containing gitlab, jenkins, sonarqube, nexus and registry (optional, also included
 in nexus)
 
 This is NOT a security tutorial, this setup uses http and weak passwords which is NOT recommended!
@@ -65,9 +65,10 @@ There are different scenarios to access the environment:
 - VirtualBox/VMWare machine
   - define the machine's ip in the machine's /etc/hosts and your windows hosts file using e.g. `docker.vm`
   - this will be the value for `.env` variable `HOST_EXTERNAL` below
-  - docker containers should be started in the docker network `ci_nw`
+  - docker containers should be started in the docker network `nw`
     - you might install a DNS server to make this hostname avaiable for all docker containers
     - install and enable `dnsmasq` and configure the machine's ip for [Docker as DNS server](https://docs.docker.com/engine/reference/commandline/dockerd/#daemon-configuration-file)
+
 
 ## Configure Environment
 
@@ -80,22 +81,30 @@ using the loadbalancer.
 # External NAME of your machine (if required add to hosts file)
 HOST_EXTERNAL=host.docker.internal
 
+# Host and Port of the chosen docker registry. Default=nexus, you may use docker-distribution by uncommenting service `registry` in docker compose.yml, see https://hub.docker.com/_/registry
+REGISTRY_ADDRESS=nexus:5000
+#REGISTRY_ADDRESS=registry:5000
+
 # Defaults 
 COMPOSE_PROJECT_NAME=ci
 PASSWORD_SONAR=stdcdevenv
 ```
 
-## Loadbalanacer
+## Loadbalancer
 
 Loadbalancer is the single point of access to all services and removes the need for adding the specific ports to the URL
 of each service. The only requirement is that it's reachable from everywhere using the same (virtual) hostname
-by providing an alias (in docker-compose.yml) using HOST_EXTERNAL, see network setup above.
+by providing an alias (in docker compose.yml) using HOST_EXTERNAL, see network setup above.
 
 The Loadbalancer service forwards HTTP(s) requests to the appropriate servers and connects its port 10022 to gitlab
 port 22. By that, all clients only need to connect to the loadbalancer in order to access any service.
  
 There is an alias name HOST_EXTERNAL which is assigned to loadbalancer in order to make this network name available
 in the docker network without having to connect to the external network. Use the real hostname or your chosen alias for that.
+
+Because of being isolated in containers and docker networks, the different products cannot determine their external address on 
+their own. That's why most software needs to be configured if it generates external links, even though the loadbalancer passes
+X_FORWARDED_* headers.
 
 
 ### Setup 
@@ -105,7 +114,7 @@ Decide whether to use ssl, if yes, follow comments in services/loadbalancer/Dock
 Create the Loadbalancer using 
 
 ```{r, engine='bash', count_lines}
-docker-compose up -d --build loadbalancer
+docker compose up -d --build loadbalancer
 ```
 
 Try to open the hostname you configured in `.env` as `HOST_EXTERNAL`
@@ -116,9 +125,9 @@ a HTML page linking to the services which will be started in the next steps.
 ### Useful commands
 
 ```{r, engine='bash', count_lines}
-docker-compose start loadbalancer
-docker-compose stop  loadbalancer
-docker-compose exec  loadbalancer tail -f /var/log/httpd/access_log    
+docker compose start loadbalancer
+docker compose stop  loadbalancer
+docker compose exec  loadbalancer tail -f /var/log/httpd/access_log    
 ```
 
 ### How to verify your network setup:
@@ -127,7 +136,7 @@ All these commands should respond with a simple html page saying 'Loadbalancer a
 
 ```
 # Both of these are required to work
-docker-compose exec loadbalancer curl http://host.docker.internal/test.html
+docker compose exec loadbalancer curl http://host.docker.internal/test.html
 docker run --rm -it --network ci_nw alpine wget -O - http://host.docker.internal/test.html
 
 # if this one gives the same result, you could omit the --network parameter in the Jenkinsfile agent.
@@ -140,8 +149,8 @@ docker run --rm -it alpine wget -O - http://host.docker.internal/test.html
 Start nexus using
 
 ```{r, engine='bash', count_lines}
-docker-compose up -d nexus
-docker-compose exec nexus cat /nexus-data/admin.password
+docker compose up -d nexus
+docker compose exec nexus cat /nexus-data/admin.password
 ```
 
 Open
@@ -150,7 +159,8 @@ Open
 http://host.docker.internal/nexus/
 ```
 
-Access Nexus, login as `admin` with the password printed out by the second command.
+Access Nexus, login as `admin` with the password printed out by the command `docker compose exec nexus cat /nexus-data/admin.password`.
+this should look like `71a6bbfc-6cc2-4e21-817e-60f0cba42c9a` 
 
 * Change Password, e.g. to `admin`
 * Enable anonymous access
@@ -158,9 +168,9 @@ Access Nexus, login as `admin` with the password printed out by the second comma
 ### Useful commands
 
 ```{r, engine='bash', count_lines}
-docker-compose start nexus
-docker-compose stop  nexus
-docker-compose logs -f --tail 1000 nexus    
+docker compose start nexus
+docker compose stop  nexus
+docker compose logs -f --tail 1000 nexus    
 ```
 
 ### Nexus and Apache Maven
@@ -168,17 +178,17 @@ docker-compose logs -f --tail 1000 nexus
 Create a repository
 
 * Server Administration -> Blob stores -> Create a blob store, e.g. `my-store`
-* Server Administration -> Repositories -> Create a hosted repository of type `maven2/hosted` e.g. `ci-java` using the 
-created blob store and version policy `mixed`
+* Server Administration -> Repositories -> Create a hosted repository of type `maven2/hosted` e.g. `ci-java-releases` and `ci-java-snapshots` using the 
+created blob store and matching version policy
 * Modify repository `maven-public` and add `ci-java` 
-* For e.g. Spring Boot create a proxied m2-repository for `https://repo.spring.io/release/` and add this to 
+* For e.g. Spring Boot create a proxied m2-repository  `maven2-spring`for `https://repo.spring.io/release/` and add this to 
 `maven-public` as well
 * Create a role eg. `nx-java`
 * Assign Privilege `nx-repository-view-`[repository-type]`-`[repository-name]`-*`
 * Assign Roles `nx-anonymous`
 * Create User `nx-java`
 * Assign created group `nx-java`
-* Try to login using the new user using the Web UI
+* Try to login using the new user using the Web UI http://host.docker.internal/nexus/ (e.g. in a private browser tab)
 
 For documentation see 
 
@@ -193,41 +203,73 @@ Create a project, e.g. using http://start.spring.io
 Add `distributionManagement` to your pom:
 
 ```xml
-	<distributionManagement>
-		<repository>
-			<id>demo-releases</id>
-			<name>demo Repository Releases</name>
-			<url>http://host.docker.internal/nexus/repository/ci-java/</url>
-		</repository>
-		<snapshotRepository>
-			<id>demo-snapshots</id>
-			<name>demo Repository Snapshots</name>
-			<url>http://host.docker.internal/nexus/repository/ci-java/</url>
-		</snapshotRepository>
-	</distributionManagement>
+  <distributionManagement>
+    <repository>
+      <id>ci-java-releases</id>
+      <name>demo Repository Releases</name>
+      <url>http://host.docker.internal/nexus/repository/ci-java-releases/</url>
+    </repository>
+    <snapshotRepository>
+      <id>ci-java-snapshots</id>
+      <name>demo Repository Snapshots</name>
+      <url>http://host.docker.internal/nexus/repository/ci-java-snapshots/</url>
+    </snapshotRepository>
+  </distributionManagement>
 ```
 
-Configure your `[HOME]/.m2/settings.xml` to always download from your nexus (`mirror`) and the server credentials.
+You might also add your nexus' public repo to the pom, this is necessary if the project won't build with
+public repositories only or without internet/proxy access.
+
+```xml
+  <repositories>
+    <repository>
+      <id>central</id>
+      <name>Nexus Repository Mirror</name>
+      <releases>
+        <enabled>true</enabled>
+      </releases>
+      <snapshots>
+        <enabled>true</enabled>
+        <updatePolicy>always</updatePolicy>
+      </snapshots>
+      <url>http://host.docker.internal/nexus/repository/maven-public/</url>
+    </repository>
+  </repositories>
+  <pluginRepositories>
+    <pluginRepository>
+      <id>central</id>
+      <name>Nexus Repository Mirror</name>
+      <releases>
+        <enabled>true</enabled>
+      </releases>
+      <snapshots>
+        <enabled>true</enabled>
+      </snapshots>
+      <url>http://host.docker.internal/nexus/repository/maven-public/</url>
+    </pluginRepository>
+  </pluginRepositories>```
+
+Configure your `[HOME]/.m2/settings.xml` to always download from your nexus (`mirror`) if required and the server credentials.
 If you need more public repositories, you need to configure those as a proxy repository in nexus and add them
 to the repository group maven-public. The same applies to your own repositories.
 
 ```xml
 <settings>
-	<mirrors>
+	<!--mirrors>
 		<mirror>
 			<id>nexus</id>
 			<url>http://host.docker.internal/nexus/repository/maven-public/</url>
 			<mirrorOf>*</mirrorOf>
 		</mirror>
-	</mirrors>
+	</mirrors-->
 	<servers>
         <server>
-            <id>demo-releases</id>
+            <id>ci-java-releases</id>
             <username>nx-java</username>
             <password>[password here]</password>
         </server>
         <server>
-            <id>demo-snapshots</id>
+            <id>ci-java-snapshots</id>
             <username>nx-java</username>
             <password>[password here]</password>
         </server>
@@ -307,6 +349,54 @@ And run the appropriate script to build & deploy your code
  npm publish dist   # only an example, might be different compared to your project
 ```
 
+## Docker registry
+
+### Docker-Distribution
+
+As mentioned above, the loadbalancer is configured to use nexus as docker registry.
+
+But you can also switch to docker-distribution by configuring `REGISTRY_ADDRESS=registry:5000` in `.env` and 
+bringing up `registry`by running `docker compose up -d registry`.
+This registry works out of the box without security.
+
+Check by using your browser http://host.docker.internal/v2/_catalog or running `docker compose exec loadbalancer  curl -s http://registry:5000/v2/_catalog`, both should respond with an emtpy json `{"repositories":[]}`
+
+### To use Nexus as Docker registry
+
+* In Administration -> Security -> Realms add "Docker Bearer Token" for Docker login
+
+Create a repository
+
+* Server Administration -> Repositories -> Create a hosted repository of type `docker/hosted` e.g. `ci-docker`
+* Check create http connector and define port 5000
+* Port 5000 is mapped in loadbalancer as /v2 and preconfigured in `.env` as  `REGISTRY_ADDRESS=nexus:5000`
+* Check by using your browser http://host.docker.internal/v2/_catalog or running `docker compose exec loadbalancer  curl -s http://nexus:5000/v2/_catalog`, both should respond with an emtpy json `{"repositories":[]}`
+
+* Create a group eg. `nx-docker`
+* Assign Privilege `nx-repository-view-`[repository-type]`-`[repository-name]`-*`
+* Assign Roles `nx-anonymous`
+* Create User `nx-docker`
+* Assign created group `nx-docker`
+
+* Without SSL you have to configure docker to use this server as an insecure registry in /etc/docker/daemon.json or in Docker Desktop
+on WSL2 in Settings ->Docker-Engine
+```
+{
+  ... other settings...
+  "insecure-registries": [ "host.docker.internal" ],
+  ... other settings...
+}
+```
+* run `docker login host.docker.internal` and use the user created above
+* create or tag and push your first image
+```
+docker pull alpine:latest
+docker tag alpine:latest host.docker.internal/base/alpine:latest
+docker push host.docker.internal/base/alpine:latest
+``` 
+
+Check http://host.docker.internal/nexus/#browse/browse:ci-docker:v2%2Fbase%2Falpine%2Ftags%2Flatest
+
 
 ## Sonarqube
 
@@ -332,9 +422,9 @@ Administration->Marketplace->Updates only -> install plugin updates
 ### Useful commands
 
 ```
-docker-compose up -d sonardb sonarqube
-docker-compose stop sonarqube && sleep 10 && docker-compose stop sonardb
-docker-compose logs -f --tail 1000 sonarqube
+docker compose up -d sonardb sonarqube
+docker compose stop sonarqube && sleep 10 && docker compose stop sonardb
+docker compose logs -f --tail 1000 sonarqube
 ```
 
 ### Sonarqube and Apache MAVEN
@@ -347,7 +437,8 @@ Run Sonar using the maven plugin by adding
 sonar:sonar -Dsonar.host.url=http://host.docker.internal/sonarqube/ -Dsonar.login=${SONAR_TOKEN}
 ```
 
-to your maven command
+to your maven command, the parameter `-Dsonar.login=...` is optional as this sonar instance by default 
+allows anonymous analysis
 
 ```
 docker-here openjdk:11 sh ./mvnw --settings ./settings.xml -Dsonar.host.url=http://host.docker.internal/sonarqube/ -Dsonar.login=${SONAR_TOKEN} clean deploy sonar:sonar
@@ -380,6 +471,25 @@ For code coverage analysis with maven and sonarqube, you need to add to build-pl
         </executions>
       </plugin>
 ...
+```
+
+The Jacoco-plugin defines the `argLine` variable for the by default included surefire plugin. If you need to configure
+the surefire pluginn, you can include it using the following pom.xml fragment.
+If you need to configure `argLine` for surefire, you have to add the `argLine` variable to not loose jacoco functions:
+
+```
+...
+<!-- surefire plugin for tests -->
+<plugin>
+    <groupId>org.apache.maven.plugins</groupId>
+    <artifactId>maven-surefire-plugin</artifactId>
+    <version>2.22.2</version>
+    <configuration>
+        <argLine>-DmySystemProperty=somevalue @{argLine}</argLine>
+    </configuration>
+</plugin>
+...
+
 ```
 
 ### Sonarqube and npm
@@ -425,9 +535,9 @@ Set up additional users and projects as required, this README will use project `
 ### Useful commands
 
 ```{r, engine='bash', count_lines}
-docker-compose up -d gitlab
-docker-compose stop  gitlab
-docker-compose logs -f gitlab    
+docker compose up -d gitlab
+docker compose stop  gitlab
+docker compose logs -f gitlab    
 ```
 
 ### Gitlab Access 
@@ -526,15 +636,23 @@ http://host.docker.internal/jenkins/
 Get the initial Secret
 
 ```{r, engine='bash', count_lines}
-docker-compose exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+docker compose exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
 ```
 
 Install suggested plugins, setup account for administrator, e.g. `admin` / `admin` and use the appropriate URL
 as Jenkins URL, e.g. http://host.docker.internal/jenkins/
 
-To create a read-only `Jenkins` user in gitlab, follow the following steps:
+To create a read-only `Jenkins` user your repository, follow the following steps:
 
-Gitlab:
+For Azure devops:
+* To generate a key pair e.g. for jenkins use (without -f ... it generates your personal keys)
+  * `ssh-keygen -t rsa -b 4096 -f keys-jenkins.rsa` 
+  * or `ssh-keygen -t ed25519 -f keys-jenkins.ed25519`
+* Open Azure https://dev.azure.com and click the Person icon left of you Account logo (second from the left) 
+  * Choose "SSH public keys"
+  * Add the contents of you `keys-jenkins.rsa.pub` file as a new SSH public key
+
+For Gitlab:
 * Login gitlab with admin account and create a new user `jenkins`, ignore password.
 * Admin area ---> users ---> edit `jenkins` user ---> set password (e.g. `jenkins123`)
 * In opened user `jenkins` click `impersonate`
@@ -558,8 +676,10 @@ Jenkins:
   * Access Control for Builds: Add `Project default build authorization`
   * `Run as SYSTEM`
   
-* Jenkins -> Manage Jenkins -> Security -> Manage Credentials -> Global credentials - add
-  * add `SSH username with private key` credentials `gitlab-ssh` for user `jenkins` and copy-paste the keyfile contents
+As this README is not a security tutorial but instructions to get this up quickly, you should reconsider different options for production use.
+  
+* Jenkins -> Manage Jenkins -> Security -> Manage Credentials -> Global credentials (http://host.docker.internal/jenkins/credentials/store/system/domain/_/)  - add
+  * add `SSH username with private key` credentials `git-ssh` for user `jenkins` and copy-paste (direct input) the keyfile contents of `keys-jenkins.rsa`
   * add `secret file` credentials `demo-settings` containing the maven `settings.xml` from above
   * add `secret text` credentials `demo-sonar-token` containing the Sonarqube token created earlier  
 
@@ -574,13 +694,13 @@ in the container to the docker group id on the host system. But this won't be ef
 
 ```
 # VirtualBox / Linux only
-docker-compose restart jenkins
+docker compose restart jenkins
 ```
 
 To check if jenkins has access to your local docker daemon, run
 
 ```
-docker-compose exec jenkins sudo docker ps
+docker compose exec jenkins docker ps
 ```
 
 You should see the same output as `docker ps` outputs on the machine's console.
@@ -603,7 +723,7 @@ pipeline {
     agent {
         docker {
             image 'openjdk:11'
-            args '--network ci_nw'
+            args '--network ci'
         }
     }
     stages {
@@ -623,7 +743,7 @@ pipeline {
 * agent -> docker  instructs docker to start your build within docker. Therefore the docker binaries are built into
 the image and the appropriate permissions are defined at startup
   * the --network ci_nw makes the container start in the ci network, so all other containers will be available by their
-  docker-compose service name
+  docker compose service name
 * Only Java is required to build java, maven is downloaded by maven wrapper
 * Maven Settings File are provided as a secret file and passed to maven using `--settings`. It contains the nexus 
  credentials
@@ -684,23 +804,23 @@ Useful commands are
 
 ```
 # bring everything up
-docker-compose up -d --build
+docker compose up -d --build
 
 # start all existing services
-docker-compose start
+docker compose start
 
 # stop all services
-docker-compose stop
+docker compose stop
 
 # remove all services (keeps volumes, so data remains in the system)
-docker-compose down
+docker compose down
 
 # remove all services - DELETE ALL DATA (volumes)
-docker-compose down -v
+docker compose down -v
 
 # backup all volumes to tgz files
 # it's better to stop all services before creating a backup
-docker-compose stop
+docker compose stop
 docker run --rm -v ci_gitlab_config:/mnt alpine tar czf - /mnt > ci_gitlab_config.tgz
 docker run --rm -v ci_gitlab_data:/mnt   alpine tar czf - /mnt > ci_gitlab_data.tgz
 docker run --rm -v ci_gitlab_logs:/mnt   alpine tar czf - /mnt > ci_gitlab_logs.tgz

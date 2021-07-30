@@ -1,4 +1,4 @@
-FROM jenkins/jenkins:2.249.2-lts-slim
+FROM jenkins/jenkins:2.289.3-lts-slim
 
 USER root
 

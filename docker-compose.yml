@@ -11,6 +11,10 @@ volumes:
   jenkins_data:
   sonardb_data:
   nexus_data:
+  registry_data:
+  gitlab_old_config:
+  gitlab_old_logs:
+  gitlab_old_data:
   
 services:
 
@@ -24,31 +28,64 @@ services:
       - 443:443
     environment:
       - HOST_EXTERNAL=${HOST_EXTERNAL}
+      - REGISTRY_ADDRESS=${REGISTRY_ADDRESS}
     networks:
       nw:
         aliases:
           - ${HOST_EXTERNAL}
 
-#  gitlab is a rather expensive container - so it's disabled by default      
+  # SMTP-Konfiguration for fake-SMTP in /opt/ci-cd/ci/data/gitlab/config/gitlab.rb
+  # (requires docker compose restart gitlab)
   gitlab:
-    image: gitlab/gitlab-ce:13.4.4-ce.0
-    restart: "no"
+    container_name: gitlab
+    image: gitlab/gitlab-ce:10.5.3-ce.0
+    restart: "unless-stopped"
     networks:
       - nw
     environment:
       # - JVM_OPTS=-Xmx1024m -Xms1024 -XX:MaxPermSize=1024m
-      GITLAB_OMNIBUS_CONFIG: |
-        external_url 'http://${HOST_EXTERNAL}/gitlab/'
-        web_server['username'] = 'git'
-        web_server['group'] = 'git'
+      GITLAB_OMNIBUS_CONFIG: "external_url 'http://${HOST_EXTERNAL}/gitlab/'"
+      # external_url 'https://gitlab.example.com'
+      # Add any other gitlab.rb configuration here, each on its own line
+      #  shm_size 100000
     ports:
       - "10080:80"
       - "10443:443"
-      - "10022:22"
+      - "22:22"
     volumes:
-      - gitlab_config:/etc/gitlab
-      - gitlab_logs:/var/log/gitlab
-      - gitlab_data:/var/opt/gitlab
+      - gitlab_old_config:/etc/gitlab
+      - gitlab_old_logs:/var/log/gitlab
+      - gitlab_old_data:/var/opt/gitlab
+
+  # curl --proxy "" -X GET    --insecure http://host.docker.internal/smtp/emails
+  # curl --proxy "" -X DELETE --insecure http://host.docker.internal/smtp/emails
+  smtp:
+    container_name: smtp
+    image: reachfive/fake-smtp-server:0.8.1
+    networks:
+      - nw
+    restart: "unless-stopped"
+
+#  gitlab is a rather expensive container - so it's disabled by default      
+#  gitlab:
+#    image: gitlab/gitlab-ce:13.4.4-ce.0
+#    restart: "no"
+#    networks:
+#      - nw
+#    environment:
+#      # - JVM_OPTS=-Xmx1024m -Xms1024 -XX:MaxPermSize=1024m
+#      GITLAB_OMNIBUS_CONFIG: |
+#        external_url 'http://${HOST_EXTERNAL}/gitlab/'
+#        web_server['username'] = 'git'
+#        web_server['group'] = 'git'
+#    ports:
+#      - "10080:80"
+#      - "10443:443"
+#      - "10022:22"
+#    volumes:
+#      - gitlab_config:/etc/gitlab
+#      - gitlab_logs:/var/log/gitlab
+#      - gitlab_data:/var/opt/gitlab
       
   jenkins:
     # https://plugins.jenkins.io/docker-plugin
@@ -78,7 +115,7 @@ services:
       - NEXUS_PORT=8081
       
   nexus:
-    image: sonatype/nexus3:3.28.1
+    image: sonatype/nexus3:3.29.0
     restart: "unless-stopped"
     ports:
       - "9091:8081"
@@ -91,7 +128,7 @@ services:
       - NEXUS_CONTEXT=nexus
       
   sonarqube:
-    image: sonarqube:8.5.0-community
+    image: sonarqube:9.0.1-community
     command: -Dsonar.web.context=/sonarqube
     restart: "unless-stopped"
     ports:
@@ -105,7 +142,7 @@ services:
      - SONARQUBE_JDBC_USERNAME=sonar
      - SONARQUBE_JDBC_PASSWORD=${PASSWORD_SONAR}
 #   volumes:
-#      - ./extensions:${CI_HOME}/services/sonarqube/sonar
+#      - ./extensions:xxxxxCI_HOME/services/sonarqube/sonar
       
   sonardb:
     # https://docs.sonarqube.org/latest/requirements/requirements/
@@ -122,18 +159,18 @@ services:
     volumes:
       - sonardb_data:/var/lib/postgresql/data
       
-#  registry:
-#    image: registry:2.7.1
-#    networks:
-#      - nw
-#    restart: "no"
-#    ports:
-#      - "5000:5000"
-#    #environment:
-#    #  - REGISTRY_AUTH=htpasswd
-#    #  - REGISTRY_AUTH_HTPASSWD_REALM=dockerregistry
-#    #  - REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd
-#    volumes:
-#      - registry_data:/var/lib/registry
+  registry:
+    image: registry:2.7.1
+    networks:
+      - nw
+    restart: "no"
+    ports:
+      - "5000:5000"
+    #environment:
+    #  - REGISTRY_AUTH=htpasswd
+    #  - REGISTRY_AUTH_HTPASSWD_REALM=dockerregistry
+    #  - REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd
+    volumes:
+      - registry_data:/var/lib/registry
       
       
