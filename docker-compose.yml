@@ -5,16 +5,16 @@ version: "3.2"
 networks:
   nw:
 volumes:
-  gitlab_config:
-  gitlab_logs:
-  gitlab_data:
+#  gitlab_config:
+#  gitlab_logs:
+#  gitlab_data:
   jenkins_data:
   sonardb_data:
   nexus_data:
   registry_data:
-  gitlab_old_config:
-  gitlab_old_logs:
-  gitlab_old_data:
+#  gitlab_old_config:
+#  gitlab_old_logs:
+#  gitlab_old_data:
   
 services:
 
@@ -24,6 +24,7 @@ services:
       dockerfile: Dockerfile
     restart: "unless-stopped"
     ports:
+      - 10022:10022
       - 80:80
       - 443:443
     environment:
@@ -34,28 +35,27 @@ services:
         aliases:
           - ${HOST_EXTERNAL}
 
-  # SMTP-Konfiguration for fake-SMTP in /opt/ci-cd/ci/data/gitlab/config/gitlab.rb
-  # (requires docker compose restart gitlab)
-  gitlab:
-    container_name: gitlab
-    image: gitlab/gitlab-ce:10.5.3-ce.0
-    restart: "unless-stopped"
-    networks:
-      - nw
-    environment:
-      # - JVM_OPTS=-Xmx1024m -Xms1024 -XX:MaxPermSize=1024m
-      GITLAB_OMNIBUS_CONFIG: "external_url 'http://${HOST_EXTERNAL}/gitlab/'"
-      # external_url 'https://gitlab.example.com'
-      # Add any other gitlab.rb configuration here, each on its own line
-      #  shm_size 100000
-    ports:
-      - "10080:80"
-      - "10443:443"
-      - "22:22"
-    volumes:
-      - gitlab_old_config:/etc/gitlab
-      - gitlab_old_logs:/var/log/gitlab
-      - gitlab_old_data:/var/opt/gitlab
+  # gitlab (old version) - disabled by default
+#  gitlab:
+#    container_name: gitlab
+#    image: gitlab/gitlab-ce:10.5.3-ce.0
+#    restart: "unless-stopped"
+#    networks:
+#      - nw
+#    environment:
+#      # - JVM_OPTS=-Xmx1024m -Xms1024 -XX:MaxPermSize=1024m
+#      GITLAB_OMNIBUS_CONFIG: "external_url 'http://${HOST_EXTERNAL}/gitlab/'"
+#      # external_url 'https://gitlab.example.com'
+#      # Add any other gitlab.rb configuration here, each on its own line
+#      #  shm_size 100000
+#    ports:
+#      - "10080:80"
+#      - "10443:443"
+#      - "22:22"
+#    volumes:
+#      - gitlab_old_config:/etc/gitlab
+#      - gitlab_old_logs:/var/log/gitlab
+#      - gitlab_old_data:/var/opt/gitlab
 
   # curl --proxy "" -X GET    --insecure http://host.docker.internal/smtp/emails
   # curl --proxy "" -X DELETE --insecure http://host.docker.internal/smtp/emails

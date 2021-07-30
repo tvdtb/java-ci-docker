@@ -1,6 +1,7 @@
 # A Standard Java Container-based Development and Continuous Integration Pipeline
 
 ## What it is
+
 A docker compose based infrastructure containing gitlab, jenkins, sonarqube, nexus and registry (optional, also included
 in nexus)
 
@@ -98,7 +99,7 @@ by providing an alias (in docker compose.yml) using HOST_EXTERNAL, see network s
 
 The Loadbalancer service forwards HTTP(s) requests to the appropriate servers and connects its port 10022 to gitlab
 port 22. By that, all clients only need to connect to the loadbalancer in order to access any service.
- 
+
 There is an alias name HOST_EXTERNAL which is assigned to loadbalancer in order to make this network name available
 in the docker network without having to connect to the external network. Use the real hostname or your chosen alias for that.
 
@@ -424,7 +425,7 @@ Administration->Marketplace->Updates only -> install plugin updates
 ```
 docker compose up -d sonardb sonarqube
 docker compose stop sonarqube && sleep 10 && docker compose stop sonardb
-docker compose logs -f --tail 1000 sonarqube
+docker compose logs -f --tail 100 sonarqube
 ```
 
 ### Sonarqube and Apache MAVEN
@@ -523,36 +524,62 @@ npm run sonar
 
 ## Gitlab
 
-Gitlab is a rather heavy container and takes some minutes to start up.
+Gitlab is a rather heavy container and takes some minutes to start up as it's a complete ci/cd solution for itself.
+
+That's why it's commented out by default in docker-compose.yml. Simply uncomment all lines containing gitlab (volumes, service).
+
 
 The default admin user is `root` and you have to change the password on first access. On first login, you need to
 change passwords for new users. Due to the password policy, a simple valid password is `gitlab123`.
 
 http://host.docker.internal/gitlab
 
-Set up additional users and projects as required, this README will use project `demo-java` for user root.
+gitlab relies on email addresses to identify users, so user's emails have to be unique. By default SMTP is off.
+For emails you might use your real mail server or the fake smtp server included in the configuration.
+
+For that edit the config using `docker compose exec gitlab vi /etc/gitlab/gitlab.rb`
+
+```
+...
+# this is for fake smtp at http://host.docker.internal/smtp/emails
+gitlab_rails['smtp_enable'] = true
+gitlab_rails['smtp_address'] = "smtp"
+gitlab_rails['smtp_port'] = 1025
+gitlab_rails['smtp_domain'] = 'test.dummy';
+gitlab_rails['smtp_tls'] = false;
+gitlab_rails['smtp_openssl_verify_mode'] = 'none'
+gitlab_rails['smtp_enable_starttls_auto'] = false
+gitlab_rails['smtp_ssl'] = false
+gitlab_rails['smtp_force_ssl'] = false
+...
+```
+
+Use `docker compose restart gitlab` to activate.
+
+
+Set up additional users and projects as required, e.g. user `demo` having password `demo1234`.
+This README will use project `demo-java` for user root.
 
 ### Useful commands
 
 ```{r, engine='bash', count_lines}
 docker compose up -d gitlab
 docker compose stop  gitlab
-docker compose logs -f gitlab    
+docker compose logs -f --tail 100 gitlab    
 ```
 
 ### Gitlab Access 
 
 Gitlab offers http and ssh access. For HTTP the base URL is `http://host.docker.internal/gitlab/` which is proxied by the 
-loadbalancer. SSH in gitlab might collide with your machine's SSH, therefore it is by default configured for 
-port 10022, so your SSH access to gitlab git repositories has to be configured.
+loadbalancer. In its run-script, the loadbalancer also forwards TCP ports 22 and 10022 to gitlab, allowing direct ssh access.
 
-Both docker port forwarding and loadbalancer provide port 10022 to connect to gitlab Port 22. 
+Docker port forwarding and loadbalancer provide port 10022 to connect to gitlab Port 22. 
 
-It is
-- Machine SSH: Port    22
+Because of virtual machines and WSL 2 typically blocking port 22, then it is
+- Machine/WSL2 SSH: Port    22
 - Gitlab SSH:  Port 10022
 
-The default URL `git@host.docker.internal:root/demo-java.git` will not work out of the box.
+The default URL `git@host.docker.internal:root/demo-java.git` will then not work out of the box, but does for local (e.g. WSL2) docker setup.
 
 For SSH access you need a key pair, which might already be generated in `~/.ssh/id_*` and should be added to your
 gitlab account using http://host.docker.internal/gitlab/profile/keys
@@ -560,6 +587,12 @@ gitlab account using http://host.docker.internal/gitlab/profile/keys
 To generate a key pair e.g. for jenkins use (without -f ... it generates your personal keys)
 * `ssh-keygen -t rsa -b 4096 -f keys-jenkins.rsa` 
 * or `ssh-keygen -t ed25519 -f keys-jenkins.ed25519`
+
+Login to gitlab using your project's user, then click on you user's icon (top bar, right side) and choose settings.
+Click ssh keys and add the contents of `keys-jenkins.rsa.pub` 
+
+
+The following options show how to configure gitlab access, option 1 is the easiest, but option 2.1 the most convenient.
 
 
 #### Option 1: Use ssh URLs (easiest option, no network setup required)
@@ -625,6 +658,16 @@ git clone http://host.docker.internal/gitlab/root/demo-java.git
 ssh user@host.docker.internal
 ```
 
+
+### Pushing to gitlab
+
+Having created a user `demo` and a project named `java-ci-docker_demo-java-spring` you can use the following commands to
+push `master` branch to gitlab:
+
+```
+git remote add gitlab git remote add gitlab git@host.docker.internal:demo/java-ci-docker_demo-java-spring.git
+git push gitlab master
+```
 
 
 ## Jenkins
@@ -839,5 +882,12 @@ cat ci_sonardb_data.tgz  | docker run --rm -i -v ci_sonardb_data:/mnt  alpine ta
 
 ```
 
+
+For gitlab you might user it's built-in backup/restore functionality
+https://docs.gitlab.com/ee/raketasks/backup_restore.html
+
+the backups will be located in /var/opt/gitlab/backups/, e.g.
+
+`docker cp gitlab:/var/opt/gitlab/backups/1627650905_2021_07_30_10.5.3_gitlab_backup.tar .` copies it to your local machine
 
 

@@ -7,6 +7,8 @@ rm -rf /run/httpd/* /tmp/httpd*
 
 # Start port forwarding to gitlab using Port 10022
 socat tcp-listen:10022,reuseaddr,fork tcp:gitlab:22 &
+socat tcp-listen:22,reuseaddr,fork tcp:gitlab:22 &
+
 
 # Start apache HTTPD
 exec /usr/sbin/apachectl -DFOREGROUND
