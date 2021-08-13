@@ -67,7 +67,7 @@ There are different scenarios to access the environment:
   - define the machine's ip in the machine's /etc/hosts and your windows hosts file using e.g. `docker.vm`
   - this will be the value for `.env` variable `HOST_EXTERNAL` below
   - docker containers should be started in the docker network `nw`
-    - you might install a DNS server to make this hostname avaiable for all docker containers
+    - you can install a DNS server to make this hostname avaiable for all docker containers
     - install and enable `dnsmasq` and configure the machine's ip for [Docker as DNS server](https://docs.docker.com/engine/reference/commandline/dockerd/#daemon-configuration-file)
 
 
@@ -218,7 +218,7 @@ Add `distributionManagement` to your pom:
   </distributionManagement>
 ```
 
-You might also add your nexus' public repo to the pom, this is necessary if the project won't build with
+You can also add your nexus' public repo to the pom, this is necessary if the project won't build with
 public repositories only or without internet/proxy access.
 
 ```xml
@@ -349,6 +349,80 @@ And run the appropriate script to build & deploy your code
 ```
  npm publish dist   # only an example, might be different compared to your project
 ```
+
+### Nexus and Docker
+
+- Create a hosted docker repository in nexus, e.g. named ci-docker and add a http connector for port 5000
+- `docker compose exec loadbalancer curl nexus:5000/v2/_catalog` should return a json with an empty `repositories` array
+- `docker compose exec jenkins curl host.docker.internal/v2/_catalog` should return the same json
+- create a nexus role `nx-docker` and add privilege `nx-repository-view-docker-ci-docker` and role `nx-anonymous`
+- create a user `nx-docker` and assign the created role `nx-docker` (sometimes the save button won't switch to enabled)
+
+In your docker's configuration (/etc/docker/daemon.json or preferences in docker desktop UI) you have to configure our
+nexus as insecure unless you configured ssl (but depending on your certificates you might struggle with them)
+
+Verify that your configuration contains
+
+```
+{
+  "insecure-registries": [
+    "host.docker.internal"
+  ]
+}
+```
+
+If you had to change it, please restart the docker engine itself.
+
+
+`docker compose exec jenkins bash`
+`docker login host.docker.internal`
+
+if you used nx-docker as username and password, this will create a file in /var/jenkins_home/.docker/config.json
+
+```
+{
+        "auths": {
+                "host.docker.internal": {
+                        "auth": "bngtZG9ja2VyOm54LWRvY2tlcg=="
+                }
+        }
+}
+```
+
+Now your jenkins user would be able to pull/push images, but we want to provide this as a secret in docker.
+- copy-paste the file contents to a new temp file on your pc
+- Upload this file as a new secret file with id `docker-config` in jenkins
+- delete the file again in jenkins `rm /var/jenkins_home/.docker/config.json`
+
+you might as well `docker login ...` on windows desktop which uses the `Windows Credentials Manager` to store these
+accounts.  That's why we did use the jenkins container to create the file
+
+In your Jenkinsfile you can now add stages to build and push your image:
+
+```
+        stage('docker') {
+            steps {
+                sh '''
+                    cd ${basePath}
+                    docker build . -t ${dockerRepo}:${dockerTag}
+                '''
+            }
+        }
+        stage('docker-push') {
+            steps {
+                withCredentials([file(credentialsId: 'docker-config', variable: 'DOCKER_CONFIG_FILE')]) {            
+                    sh '''
+                        cd ${basePath}
+                        export DOCKER_CONFIG=$(dirname $DOCKER_CONFIG_FILE)
+                        docker history ${dockerRepo}:${dockerTag}
+                        docker push ${dockerRepo}:${dockerTag}
+                    '''
+                }
+            }
+        }
+```
+
+
 
 ## Docker registry
 
@@ -535,7 +609,7 @@ change passwords for new users. Due to the password policy, a simple valid passw
 http://host.docker.internal/gitlab
 
 gitlab relies on email addresses to identify users, so user's emails have to be unique. By default SMTP is off.
-For emails you might use your real mail server or the fake smtp server included in the configuration.
+For emails you can use your real mail server or the fake smtp server included in the configuration.
 
 For that edit the config using `docker compose exec gitlab vi /etc/gitlab/gitlab.rb`
 
@@ -559,6 +633,10 @@ Use `docker compose restart gitlab` to activate.
 
 Set up additional users and projects as required, e.g. user `demo` having password `demo1234`.
 This README will use project `demo-java` for user root.
+
+For WebHooks in order to send events to jenkins, in admin settings -> network -> Outbound requests you might need to enable
+requests to local adresses.
+
 
 ### Useful commands
 
@@ -701,7 +779,7 @@ For Gitlab:
 * In opened user `jenkins` click `impersonate`
 * Add ssh key for jenkins to this account
 * Add `jenkins` as member with role `Developer` to project(s)
-* Login using `jenkins` and change password as advised, you might use `jenkins123` again
+* Login using `jenkins` and change password as advised, you can use `jenkins123` again
 
 Jenkins:
 * Login to Jenkins as admin
@@ -713,6 +791,7 @@ Jenkins:
   * http://host.docker.internal/jenkins/updateCenter/ - Click restart checkbox at the very bottom
   * Update all Plugins http://host.docker.internal/jenkins/pluginManager/
   * Install Docker Pipeline Plugin: https://plugins.jenkins.io/docker-workflow/
+  * Install Pipeline Utility Steps Plugin
   * Install Authorize Project: https://plugins.jenkins.io/authorize-project/
   * Check restart checkbox which will restart jenkins when finished installing to apply plugin updates
 * Jenkins -> Manage Jenkins -> Configure Global Security
@@ -828,7 +907,7 @@ To integrate gitlab with Jenkins:
 * Check by running `curl -v --user gitlab:115e09e85a035e5f2a166f0cffa7abad0c -X POST http://host.docker.internal/jenkins/job/demo-java/build`
 or `http://gitlab:115e09e85a035e5f2a166f0cffa7abad0c@host.docker.internal/jenkins/job/demo-java/build`
 the response should be HTTP 302 redirecting to the build log in  http://host.docker.internal/jenkins/job/demo-java/
-* In gitlab navigate to your project -> Settings -> WebHooks
+* In gitlab navigate to your project -> Settings -> WebHooks (make sure you enabled local outbound network connections, see gitlab setup)
 * Add WebHook for Push events to URL `http://[user]:[token]@host.docker.internal/jenkins/job/[job-name]/build` which is for this 
 example `http://gitlab:115e09e85a035e5f2a166f0cffa7abad0c@host.docker.internal/jenkins/job/demo-java/build` which actually
 corresponds to scanning the multibranch pipeline
@@ -873,21 +952,43 @@ docker run --rm -v ci_sonardb_data:/mnt  alpine tar czf - /mnt > ci_sonardb_data
 
 # restore all volumes from tgz files
 # the volumes should be emtpy or non-existent an will be created by these commands
-cat ci_gitlab_config.tgz | docker run --rm -i -v ci_gitlab_config:/mnt alpine tar xzf -
-cat ci_gitlab_data.tgz   | docker run --rm -i -v ci_gitlab_data:/mnt   alpine tar xzf -
-cat ci_gitlab_logs.tgz   | docker run --rm -i -v ci_gitlab_logs:/mnt   alpine tar xzf -
+cat gitlab_config.tgz | docker run --rm -i -v ci_gitlab_config:/mnt alpine tar xzf - -C /mnt
+cat gitlab_data.tgz   | docker run --rm -i -v ci_gitlab_data:/mnt   alpine tar xzf - -C /mnt
+cat gitlab_logs.tgz   | docker run --rm -i -v ci_gitlab_logs:/mnt   alpine tar xzf - -C /mnt
 cat ci_jenkins_data.tgz  | docker run --rm -i -v ci_jenkins_data:/mnt  alpine tar xzf -
 cat ci_nexus_data.tgz    | docker run --rm -i -v ci_nexus_data:/mnt    alpine tar xzf -
 cat ci_sonardb_data.tgz  | docker run --rm -i -v ci_sonardb_data:/mnt  alpine tar xzf -
 
 ```
 
+## Gitlab official backup and upgrading process
 
-For gitlab you might user it's built-in backup/restore functionality
+For gitlab you can use it's built-in backup/restore functionality
 https://docs.gitlab.com/ee/raketasks/backup_restore.html
 
 the backups will be located in /var/opt/gitlab/backups/, e.g.
 
 `docker cp gitlab:/var/opt/gitlab/backups/1627650905_2021_07_30_10.5.3_gitlab_backup.tar .` copies it to your local machine
+
+For upgrading gitlab, you can just update the version in docker-compose.yml, following the steps
+- Upgrade to the latest minor version of the current major version - e.g. from X.2.y to X.7.z
+- Upgrade to the first minor version of the next major version - e.g. FROM X.7.z to A.0.b
+- Repeat the process until you reach the desired version
+	
+see https://docs.gitlab.com/ee/update/index.html#upgrading-to-a-new-major-version
+
+
+## Mirror all git repositories
+
+- As `root` create a Access Token for API calls and export it to your shell's environment: `export API_TOKEN=...`
+- List all projects to `projects.json`: `curl "http://host.docker.internal/gitlab/api/v4/projects?private_token=$API_TOKEN&per_page=100&page=1" | jq > projects.json`
+  - if there are more than 100 you have to repeat this for page=2 and so on
+- Define your git clone base url (containing user and password if not locally/ssh authenticated): `export GIT_BASE_URL=http://root:[insert password here]@host.docker.internal/gitlab/`
+- 
+- close shell and clean history from recorded commands using cleartext passwords
+
+
+
+
 
 
