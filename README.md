@@ -150,7 +150,7 @@ docker run --rm -it alpine wget -O - http://host.docker.internal/test.html
 Start nexus using
 
 ```{r, engine='bash', count_lines}
-docker compose up -d nexus
+docker compose up -d loadbalancer nexus
 docker compose exec nexus cat /nexus-data/admin.password
 ```
 

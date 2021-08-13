@@ -1,0 +1,7 @@
+{
+        "auths": {
+                "host.docker.internal": {
+                        "auth": "bngtZG9ja2VyOm54LWRvY2tlcg=="
+                }
+        }
+}
