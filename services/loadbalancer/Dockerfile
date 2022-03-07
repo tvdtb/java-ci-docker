@@ -1,6 +1,6 @@
 # *************************************************************************************
 # Prepare files in a Builder Image
-FROM centos:8 as builder
+FROM centos:7 as builder
 
 ENV ROOT=/builder
 
@@ -30,7 +30,7 @@ RUN  chmod -v +x $ROOT/run-httpd.sh                     && \
 
 # *************************************************************************************
 # Build the final image
-FROM centos:8
+FROM centos:7
 
 # see https://github.com/CentOS/CentOS-Dockerfiles/blob/master/httpd/centos7/Dockerfile
 RUN yum -y --setopt=tsflags=nodocs install httpd mod_proxy_html openssl socat    && \   
